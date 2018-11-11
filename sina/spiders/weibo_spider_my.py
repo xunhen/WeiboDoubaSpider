@@ -7,14 +7,14 @@ from scrapy.selector import Selector
 from scrapy.http import Request
 from scrapy.utils.project import get_project_settings
 from scrapy_redis.spiders import RedisSpider
-from sina.items import TweetsItem, InformationItem
+from sina.items import TweetsItem, InformationItem,CommentItem
 from sina.spiders.utils import time_fix
 import time
 
 
 class WeiboSpider(RedisSpider):
     name = "weibo_spider"
-    base_url = "https://weibo.com"
+    base_url = "https://weibo.cn"
     redis_key = "weibo_spider:start_urls"
 
     custom_settings = {
@@ -59,7 +59,6 @@ class WeiboSpider(RedisSpider):
                     './/a[contains(text(),"评论[") and not(contains(text(),"原文"))]/text()')[0]
                 tweet_item['comment_num'] = int(re.search('\d+', comment_num).group())
                 tweet_content_node = tweet_node.xpath('.//span[@class="ctt"]')[0]
-
                 # 检测由没有阅读全文:
                 all_content_link = tweet_content_node.xpath('.//a[text()="全文"]')
                 if all_content_link:
@@ -74,6 +73,11 @@ class WeiboSpider(RedisSpider):
 
                 yield Request(url="https://weibo.cn/{}/info".format(tweet_item['user_id']),
                               callback=self.parse_information, priority=2)
+
+                # 抓取该微博的评论信息
+                comment_url = self.base_url + '/comment/' + tweet_item['weibo_url'].split('/')[-1] + '?page=1'
+                print(comment_url)
+                yield Request(url=comment_url, callback=self.parse_comment, meta={'item': tweet_item})
 
             except Exception as e:
                 self.logger.error(e)
@@ -148,6 +152,35 @@ class WeiboSpider(RedisSpider):
             information_item['fans_num'] = int(fans_num[0])
         yield information_item
 
+    def parse_comment(self, response):
+        # 如果是第1页，一次性获取后面的所有页
+        if response.url.endswith('page=1'):
+            all_page = re.search(r'/>&nbsp;1/(\d+)页</div>', response.text)
+            if all_page:
+                all_page = all_page.group(1)
+                all_page = int(all_page)
+                for page_num in range(2, all_page + 1):
+                    page_url = response.url.replace('page=1', 'page={}'.format(page_num))
+                    yield Request(page_url, self.parse_comment, dont_filter=True, meta=response.meta)
+
+        selector = Selector(response)
+        comment_nodes = selector.xpath('//div[@class="c" and contains(@id,"C_")]')
+        for comment_node in comment_nodes:
+            comment_user_url = comment_node.xpath('.//a[contains(@href,"/u/")]/@href').extract_first()
+            if not comment_user_url:
+                continue
+            comment_item = CommentItem()
+            comment_item['crawl_time'] = int(time.time())
+            comment_item['weibo_url'] = response.meta['item']['weibo_url']
+            comment_item['comment_user_id'] = re.search(r'/u/(\d+)', comment_user_url).group(1)
+            comment_item['content'] = comment_node.xpath('.//span[@class="ctt"]').xpath('string(.)').extract_first()
+            comment_item['_id'] = comment_node.xpath('./@id').extract_first()
+            created_at = comment_node.xpath('.//span[@class="ct"]/text()').extract_first()
+            comment_item['created_at'] = time_fix(created_at.split('\xa0')[0])
+            yield comment_item
+
+            yield Request(url="https://weibo.cn/{}/info".format(comment_item['comment_user_id']),
+                          callback=self.parse_information, priority=2)
 
 if __name__ == "__main__":
     process = CrawlerProcess(get_project_settings())

@@ -2,7 +2,7 @@
 import random
 
 import pymongo
-from sina.settings import LOCAL_MONGO_PORT, LOCAL_MONGO_HOST, DB_NAME
+from sina.douban_settings import LOCAL_MONGO_PORT, LOCAL_MONGO_HOST, DB_NAME,DEFAULT_REQUEST_HEADERS
 
 
 class CookieMiddleware(object):
@@ -15,6 +15,7 @@ class CookieMiddleware(object):
         self.account_collection = client[DB_NAME]['account']
 
     def process_request(self, request, spider):
+        '''
         all_count = self.account_collection.find({'status': 'success'}).count()
         if all_count == 0:
             raise Exception('当前账号池为空')
@@ -22,6 +23,9 @@ class CookieMiddleware(object):
         random_account = self.account_collection.find({'status': 'success'})[random_index]
         request.headers.setdefault('Cookie', random_account['cookie'])
         request.meta['account'] = random_account
+        '''
+        request.headers.setdefault('Cookie', DEFAULT_REQUEST_HEADERS['Cookie'])
+        request.meta['account'] = DEFAULT_REQUEST_HEADERS['User-Agent']
 
 
 class RedirectMiddleware(object):
